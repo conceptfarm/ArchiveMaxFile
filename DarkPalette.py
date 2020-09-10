@@ -11,7 +11,14 @@ class QtDarkPalette(QPalette):
 
 		self.setColor(QPalette.Disabled, QPalette.Button, self.baseAltColour)
 		self.setColor(QPalette.Disabled, QPalette.ButtonText, self.baseAltColour)
-
+		
+		self.setColor(QPalette.Active, QPalette.Button, self.baseAltColour)
+		self.setColor(QPalette.Active, QPalette.ButtonText, Qt.white)
+		
+		self.setColor(QPalette.Inactive, QPalette.Button, self.baseAltColour)
+		self.setColor(QPalette.Inactive, QPalette.ButtonText, Qt.white)
+	
+	
 		self.setColor(QPalette.Window, self.baseAltColour)
 		self.setColor(QPalette.WindowText, Qt.white)
 		self.setColor(QPalette.Base, self.baseColour)
@@ -19,8 +26,6 @@ class QtDarkPalette(QPalette):
 		self.setColor(QPalette.ToolTipBase, Qt.white)
 		self.setColor(QPalette.ToolTipText, Qt.white)
 		self.setColor(QPalette.Text, Qt.white)
-		self.setColor(QPalette.Active, QPalette.Button, self.baseAltColour)
-		self.setColor(QPalette.Active, QPalette.ButtonText, Qt.white)
 		self.setColor(QPalette.BrightText, Qt.red)
 		self.setColor(QPalette.Link, self.highlightColour)
 		self.setColor(QPalette.Highlight, self.highlightColour)
