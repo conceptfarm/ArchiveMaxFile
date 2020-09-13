@@ -9,13 +9,11 @@ from os import path, remove
 
 class MaxFileZip():
 
-	def __init__(self, inMaxFile, outZipFile, overwrite=False, progress_callback=None):
-		self.inMaxFile = inMaxFile
+	def __init__(self, inFileDict, outZipFile=None, overwrite=False):
+		self.inFileDict = inFileDict
 		self.outZipFile = outZipFile
 		self.overwrite = overwrite
-
-
-
+		
 	def bitToGUID(self, bits):
 		'''
 		GUID in Microsoft OLE are stored as mixed endian
@@ -86,14 +84,11 @@ class MaxFileZip():
 
 			yield assetMetaData
 
-
-	#print( sys.getfilesystemencoding()	)
-
-	def main(self, **kwargs):
-		progress_callback = kwargs['progress_callback']
+	def collectMetaDataFromFile(self, file):
+		allAssetMetaData = None
 		
-		if olefile.isOleFile(self.inMaxFile):
-			with olefile.OleFileIO(self.inMaxFile) as ole:
+		if olefile.isOleFile(file):
+			with olefile.OleFileIO(file) as ole:
 				oleDirs = ole.listdir()
 				streamName = ''
 				streamData = b''
@@ -104,56 +99,90 @@ class MaxFileZip():
 					streamName = 'FileAssetMetaData3'
 					hasResolvedPath = True
 				else:
-					exit()
+					return None
 
 				oleStream = ole.openstream(streamName)
 				
-				allAssetMetaData=[]
+				allAssetMetaData=[]			
 				
 				for a in self.readStream(oleStream,hasResolvedPath):
 					#print(a)
 					allAssetMetaData.append(a)
 
-				zfName = self.outZipFile
-				mfName = 'Missing Files.txt'
-				missingFilesCount = 0
+			return allAssetMetaData
 
-				with zipfile.ZipFile(zfName, 'w', zipfile.ZIP_DEFLATED) as archFile, open(mfName, 'w') as missingFilesFile:
+		else:
+			return allAssetMetaData
 
-					# Adding files from directory 'files'
-					for count, data in enumerate(allAssetMetaData):
+	#print( sys.getfilesystemencoding()	)
+
+	def main(self, **kwargs):
+		progress_callback = kwargs['progress_callback']
+		progress_started = kwargs['progress_started']
+		progress_finished = kwargs['progress_finished']
+		progress_error = kwargs['progress_error']
+
+		
+		zfName =''
+
+		if self.outZipFile != None:
+			zfName = self.outZipFile
+		else:
+			zfName = list(self.inFileDict.values())[0] + '.zip'
+		
+		mfName = zfName + 'Missing Files.txt'
+		missingFilesCount = 0
+		processedFiles = set()
+		
+		with zipfile.ZipFile(zfName, 'w', zipfile.ZIP_DEFLATED) as archFile, open(mfName, 'w') as missingFilesFile:
+			for index, inMaxFile in self.inFileDict.items():
+				progress_started.emit((index,'proc'))
+
+				allAssetMetaData = self.collectMetaDataFromFile(inMaxFile)
+
+				if allAssetMetaData == None:
+					#error message - not a valid max file
+					progress_error.emit((index,'error'))
+					continue
+
+				# Adding files from directory 'files'
+				for count, data in enumerate(allAssetMetaData):
+					if data[2] not in processedFiles:
 						if path.exists(data[2]):
 							archFile.write(data[2], data[2].replace(':','',1))
+							processedFiles.add(data[2])
 						else:
 							missingFilesFile.write(data[2]+'\n')
+							processedFiles.add(data[2])
 							missingFilesCount +=1
 
-						#i = (count+1)/len(allAssetMetaData)*100
-						#print(i)
-						
-						if progress_callback != None:
-							try:
-								i = round(((count+1)/len(allAssetMetaData)*100),2)
-								progress_callback.emit(i)
-							except:
-								print('error')
-						
-					missingFilesFile.close()
+					#i = (count+1)/len(allAssetMetaData)*100
+					#print(index,i)
 					
-					archFile.write(self.inMaxFile, self.inMaxFile.replace(':','',1))
-					if missingFilesCount > 0:
-						archFile.write(mfName)
-					#archFile.close()
-				remove(mfName)
+					i = round(((count+1)/len(allAssetMetaData)*100),2)
+					progress_callback.emit((index,i))
+
+					
+				archFile.write(inMaxFile, inMaxFile.replace(':','',1))
+				
+			missingFilesFile.close()
+			if missingFilesCount > 0:
+				archFile.write(mfName, 'Missing Files.txt')
+			#archFile.close()
+		remove(mfName)
+		for index, inMaxFile in self.inFileDict.items():
+			progress_finished.emit((index,'good'))
+
+
 
 '''
-
 #use:
-inF = 'C:/Python37/15-01-21_CIYE_Set.max'
-outF = 'C:/Python37/15-01-21_CIYE_Set.zip'
+#inF = {0: 'C:\\Python37\\NEWS.txt', 1: 'C:\\Python37\\assetTest.max', 2: 'C:\\Python37\\field_skin.max'}
+inF = {0: 'C:\\Python37\\15-01-21_CIYE_Set.max'}
+outF = 'C:/Python37/test.zip'
 
 gr = MaxFileZip(inF, outF, False, None)
 gr.main()
-
 '''
+
 
