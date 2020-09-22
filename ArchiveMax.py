@@ -521,8 +521,8 @@ if __name__ == '__main__':
 	app.setStyle('Fusion')
 	app.setPalette(palette)
 
-	#dirList = set()
-	dirList = {'C:\\Python37\\NEWS.txt','C:\\Python37\\15-01-21_CIYE_Set.max','C:\\Python37\\assetTest.max','C:\\Python37\\field_skin.max'}
+	dirList = set()
+	#dirList = {'C:\\Python37\\NEWS.txt','C:\\Python37\\15-01-21_CIYE_Set.max','C:\\Python37\\assetTest.max','C:\\Python37\\field_skin.max'}
 	
 	for arg in sys.argv:
 		if PurePath(arg).suffix == '.max':
