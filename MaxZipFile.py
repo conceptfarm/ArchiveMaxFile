@@ -5,15 +5,16 @@ import codecs
 import olefile
 
 from os import path, remove
-
+from pathlib import PurePath, Path
 
 class MaxFileZip():
 
-	def __init__(self, inFileDict, outZipFile=None, overwrite=False):
+	def __init__(self, inFileDict, outputZipDir, outZipFile=None, overwrite=False):
 		self.inFileDict = inFileDict
+		self.outputZipDir = outputZipDir
 		self.outZipFile = outZipFile
 		self.overwrite = overwrite
-		
+				
 	def bitToGUID(self, bits):
 		'''
 		GUID in Microsoft OLE are stored as mixed endian
@@ -126,9 +127,12 @@ class MaxFileZip():
 		zfName =''
 
 		if self.outZipFile != None:
-			zfName = self.outZipFile
+			zfName = str(self.outZipFile)
 		else:
-			zfName = list(self.inFileDict.values())[0] + '.zip'
+			zipName = PurePath(list(self.inFileDict.values())[0]).name
+			zfName = str(PurePath(self.outputZipDir,(zipName+'.zip')))
+		
+		print(zfName)
 		
 		mfName = zfName + 'Missing Files.txt'
 		missingFilesCount = 0

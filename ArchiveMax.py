@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
 
 	def setupUi(self, MainWindow):
 		self.setGeometry(self.left, self.top, self.width, self.height)
+		self.setWindowIcon(appIcon)
 		self.setWindowTitle('Max File Archiver')
 		self.centralwidget = QWidget(MainWindow)
 		self.centralwidget.setObjectName('centralwidget')
@@ -288,9 +289,10 @@ class MainWindow(QMainWindow):
 		self.process_btn.setObjectName('process_btn')
 
 		
-		if Path(self.zipFileDir).is_dir() == False:
+		if Path(self.zipFileDir.strip()).is_dir() == False or (self.zipFileDir) == '':
 			self.process_btn.setEnabled(False)
 		else:
+			print(self.zipFileDir, 'path')
 			self.process_btn.setEnabled(True)
 			self.archiveDir = True
 
@@ -463,7 +465,8 @@ class MainWindow(QMainWindow):
 			
 		
 		for data in processData:		
-			maxZip = MaxFileZip(data, outPutZipFile, True)
+			print(data)
+			maxZip = MaxFileZip(data, PurePath(self.zipFileDir_txt.text()), outPutZipFile, True)
 			
 			worker = Worker(maxZip.main)
 			worker.signals.started.connect(self.setIconData)
@@ -533,7 +536,7 @@ if __name__ == '__main__':
 
 	zipFileDir = ''
 	
-	#appIcon = appIcons.qIconFromBase64(appIcons.appIconBase64)
+	appIcon = appIcons.qIconFromBase64(appIcons.clampB)
 	
 	try:
 		config.read(configFileName)
