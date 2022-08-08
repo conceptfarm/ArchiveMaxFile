@@ -85,8 +85,7 @@ class MaxFileZip():
 
 			yield assetMetaData
 
-	def collectMetaDataFromFile(self, file):
-		allAssetMetaData = None
+	def collectAssetsPathsFromFile(self, file, allAssetsPaths=[]):
 		
 		if olefile.isOleFile(file):
 			with olefile.OleFileIO(file) as ole:
@@ -102,18 +101,20 @@ class MaxFileZip():
 				else:
 					return None
 
-				oleStream = ole.openstream(streamName)
+				oleStream = ole.openstream(streamName)	
 				
-				allAssetMetaData=[]			
-				
-				for a in self.readStream(oleStream,hasResolvedPath):
-					#print(a)
-					allAssetMetaData.append(a)
+				for assetObj in self.readStream(oleStream,hasResolvedPath):
+					#print(assetObj[2])
+					if assetObj[2] not in allAssetsPaths:
+						if assetObj[1] == 'XRef':
+							allAssetsPaths.append(assetObj[2])
+							allAssetsPaths = allAssetsPaths + self.collectAssetsPathsFromFile(assetObj[2], allAssetsPaths)
+						allAssetsPaths.append(assetObj[2])
 
-			return allAssetMetaData
+			return allAssetsPaths
 
 		else:
-			return allAssetMetaData
+			return None
 
 	#print( sys.getfilesystemencoding()	)
 
@@ -142,28 +143,28 @@ class MaxFileZip():
 			for index, inMaxFile in self.inFileDict.items():
 				progress_started.emit((index,'proc'))
 
-				allAssetMetaData = self.collectMetaDataFromFile(inMaxFile)
+				allAssetsPaths = self.collectAssetsPathsFromFile(inMaxFile)
 
-				if allAssetMetaData == None:
+				if allAssetsPaths == None:
 					#error message - not a valid max file
 					progress_error.emit((index,'error'))
 					continue
 
 				# Adding files from directory 'files'
-				for count, data in enumerate(allAssetMetaData):
-					if data[2] not in processedFiles:
-						if path.exists(data[2]):
-							archFile.write(data[2], data[2].replace(':','',1))
-							processedFiles.add(data[2])
+				for count, assetPath in enumerate(allAssetsPaths):
+					if assetPath not in processedFiles:
+						if path.exists(assetPath):
+							archFile.write(assetPath, assetPath.replace(':','',1))
+							processedFiles.add(assetPath)
 						else:
-							missingFilesFile.write(data[2]+'\n')
-							processedFiles.add(data[2])
+							missingFilesFile.write(assetPath+'\n')
+							processedFiles.add(assetPath)
 							missingFilesCount +=1
 
-					#i = (count+1)/len(allAssetMetaData)*100
+					#i = (count+1)/len(allAssetsPaths)*100
 					#print(index,i)
 					
-					i = round(((count+1)/len(allAssetMetaData)*100),2)
+					i = round(((count+1)/len(allAssetsPaths)*100),2)
 					progress_callback.emit((index,i))
 
 					
@@ -182,7 +183,7 @@ class MaxFileZip():
 '''
 #use:
 #inF = {0: 'C:\\Python37\\NEWS.txt', 1: 'C:\\Python37\\assetTest.max', 2: 'C:\\Python37\\field_skin.max'}
-inF = {0: 'C:\\Python37\\15-01-21_CIYE_Set.max'}
+inF = {0: 'X:/22-2071_VanTrust-Columbus New Albany/01_Models/04_Animation/CamSetup.max'}
 outF = 'C:/Python37/test.zip'
 
 gr = MaxFileZip(inF, outF, False, None)

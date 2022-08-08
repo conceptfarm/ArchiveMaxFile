@@ -348,7 +348,6 @@ class MainWindow(QMainWindow):
 			config.write(configfile)
 
 	def setPBData(self,data):
-
 		self.w.item(data[0],2).setData(Qt.UserRole+1000,data[1])
 
 	def setIconData(self, data):
@@ -521,8 +520,8 @@ if __name__ == '__main__':
 	app.setStyle('Fusion')
 	app.setPalette(palette)
 
-	dirList = set()
-	#dirList = {'C:\\Python37\\NEWS.txt','C:\\Python37\\15-01-21_CIYE_Set.max','C:\\Python37\\assetTest.max','C:\\Python37\\field_skin.max'}
+	#dirList = set()
+	dirList = {'X:/22-2071_VanTrust-Columbus New Albany/01_Models/04_Animation/CamSetup.max'}
 	
 	for arg in sys.argv:
 		if PurePath(arg).suffix == '.max':
