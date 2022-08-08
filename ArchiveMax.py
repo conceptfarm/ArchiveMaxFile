@@ -520,9 +520,8 @@ if __name__ == '__main__':
 	app.setStyle('Fusion')
 	app.setPalette(palette)
 
-	#dirList = set()
-	dirList = {'X:/22-2071_VanTrust-Columbus New Albany/01_Models/04_Animation/CamSetup.max'}
-	
+	dirList = set()
+		
 	for arg in sys.argv:
 		if PurePath(arg).suffix == '.max':
 			dirList.add(str(PurePath(arg)))
