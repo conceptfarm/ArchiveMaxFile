@@ -1,3 +1,2 @@
 olefile>=0.46
 PyQt5>=5.6
-sip
