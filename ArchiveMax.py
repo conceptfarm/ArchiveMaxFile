@@ -1,8 +1,7 @@
 import os
 import sys
-import platform
 import configparser
-import traceback
+import tempfile
 
 from pathlib import PurePath, Path
 
@@ -10,126 +9,14 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
-from MaxZipFile import MaxFileZip
-from DarkPalette import QtDarkPalette
-from AppIcons import AppIcons
+from lib.MaxZipFile import MaxFileZip
+from lib.DarkPalette import QtDarkPalette
+from lib.AppIcons import AppIcons
+from lib.Threading import Worker
+from lib.TableWidget import FileTable
 
-palette = QtDarkPalette()
-appIcons = AppIcons()
-
-
-#################
-## WORKER CLASS
-#################
-
-class WorkerSignals(QObject):
-	started = pyqtSignal(tuple)
-	finished = pyqtSignal(tuple)
-	error = pyqtSignal(tuple)
-	result = pyqtSignal(object)
-	final = pyqtSignal()
-	progress = pyqtSignal(tuple)
-
-
-class Worker(QRunnable):
-	def __init__(self, fn, *args, **kwargs):
-		super().__init__()
-
-		# Store constructor arguments (re-used for processing)
-		self.setAutoDelete(True)
-		self.fn = fn
-		self.args = args
-		self.kwargs = kwargs
-		self.signals = WorkerSignals()
-
-		# Add the callback to our kwargs
-		self.kwargs['progress_callback'] = self.signals.progress
-		self.kwargs['progress_started'] = self.signals.started
-		self.kwargs['progress_error'] = self.signals.error
-		self.kwargs['progress_finished'] = self.signals.finished
-		
-	
-	@pyqtSlot()
-	def run(self):
-		'''
-		Initialise the runner function with passed args, kwargs.
-		'''
-		
-		# Retrieve args/kwargs here; and fire processing using them
-		try:
-			result = self.fn(*self.args, **self.kwargs)
-		except:
-			traceback.print_exc()
-			exctype, value = sys.exc_info()[:2]
-			#self.signals.error.emit((exctype, value, traceback.format_exc()))
-			#self.signals.error.emit()
-		else:
-			self.signals.result.emit(result)  # Return the result of the processing
-		finally:
-			self.signals.final.emit()  # Done
-
-
-#####################
-## DELEGATES
-#####################
-
-class ProgressDelegate(QStyledItemDelegate):
-	def paint(self, painter, option, index):
-		progress = index.data(Qt.UserRole+1000)
-
-		opt = QStyleOptionProgressBar()
-		opt.rect = option.rect.adjusted(5,5,-5,-5)
-		opt.minimum = 0
-		opt.maximum = 100
-
-		opt.progress = progress
-		opt.text = "{}%".format(progress)
-		opt.textAlignment = Qt.AlignCenter
-		opt.textVisible = True
-		QApplication.style().drawControl(QStyle.CE_ProgressBar, opt, painter)
-
-
-class IconDelegate(QStyledItemDelegate):
-	def __init__(self, Parent=None):
-		super().__init__()
-		
-		self.emptyIcon = QIcon(QApplication.style().standardIcon(QStyle.SP_CustomBase))
-		self.goodIcon = appIcons.qIconFromBase64(appIcons.tickIconB)
-		self.errorIcon = appIcons.qIconFromBase64(appIcons.crossIconB)
-		self.processingIcon = appIcons.qIconFromBase64(appIcons.arrowIconB)
-
-		self._iconDict = {'empty':self.emptyIcon,'good':self.goodIcon,'error':self.errorIcon,'proc':self.processingIcon}
-	
-
-	def paint(self, painter, option, index):
-		d = index.data(Qt.UserRole+1001)
-		icon = self._iconDict[d]
-		#option.rect = option.rect.adjusted(5,5,-5,-5)
-		#option.rect.setSize(QSize(15,15))
-		icon.paint(painter, option.rect, Qt.AlignCenter)
-
-
-class RemoveButton2(QWidget):
-	def __init__(self, Parent=None):
-		super().__init__()
-		self.button = QPushButton('', Parent)
-		self.button.setIcon(appIcons.qIconFromBase64(appIcons.trashBIconB))
-		self.button.setMaximumWidth(40)
-		self.pLayout = QHBoxLayout(Parent)
-		self.pLayout.addWidget(self.button)
-		self.pLayout.setAlignment(Qt.AlignRight)
-		self.pLayout.setContentsMargins(0, 0, 0, 0)
-		self.setLayout(self.pLayout);
-		
-class RemoveButton(QPushButton):		
-	def __init__(self, Parent=None):
-		super().__init__()
-		self.trashIcon = appIcons.qIconFromBase64(appIcons.trashIconB)
-		self.setIcon(self.trashIcon)
-		self.setIconSize(self.trashIcon.actualSize(QSize(50,50)))
-		self.setFlat(True)
-		self.setMaximumWidth(40)
-
+PALETTE = QtDarkPalette()
+APPICONS = AppIcons()
 
 #####################
 ## MAIN WINDOW CLASS
@@ -137,12 +24,13 @@ class RemoveButton(QPushButton):
 
 class MainWindow(QMainWindow):
 	
-	def __init__(self, droppedFiles, zipFileDir):
+	def __init__(self, droppedFiles: set, zipFileDir: str):
 		super().__init__()
 		self.left = 150
 		self.top = 150
 		self.width = 800
 		self.height = 480
+		self.fileTable = None
 		self.droppedFiles = droppedFiles
 		self.zipFileDir = zipFileDir
 		self.threadpool = QThreadPool().globalInstance()
@@ -153,9 +41,9 @@ class MainWindow(QMainWindow):
 		self.singleCheck = False
 		self.singleFile = False
 
-		self.diskIcon = appIcons.qIconFromBase64(appIcons.diskIconB)		
-		self.folderIcon = appIcons.qIconFromBase64(appIcons.folderIconB)
-		self.maxFilePix = appIcons.qPixmapFromBase64(appIcons.maxFileIconB)
+		self.diskIcon = APPICONS.qIconFromBase64(APPICONS.diskIconB)		
+		self.folderIcon = APPICONS.qIconFromBase64(APPICONS.folderIconB)
+		self.maxFilePix = APPICONS.qPixmapFromBase64(APPICONS.maxFileIconB)
 		
 		self.setupUi(self)
 
@@ -174,28 +62,11 @@ class MainWindow(QMainWindow):
 		self.table_gl.setSpacing(6)
 		self.table_gl.setObjectName('table_gl')
 
-		self.w = QTableWidget(0,4)
-		self.w.setObjectName('table')
-		self.w.setSelectionMode(QAbstractItemView.NoSelection)
-		self.w.setState(QAbstractItemView.NoState)
-		#self.w.setShowGrid(False)
-		#self.w.setStyleSheet("QTableWidget::item {padding-left: 10px; border-bottom: 1px solid white} QTableWidget {background-color: #353535; border-width:5px}")
-
-		self.progDelegate = ProgressDelegate(self.w)
-		self.iconDelegate = IconDelegate(self.w)
-		self.w.setItemDelegateForColumn(2, self.progDelegate)
-		self.w.setItemDelegateForColumn(0, self.iconDelegate)
-		self.w.horizontalHeader().setSectionResizeMode(1,QHeaderView.Stretch)
-		self.w.horizontalHeader().hide()
-		self.w.verticalHeader().hide()
-		self.w.setColumnWidth(0,10)
-		self.w.setColumnWidth(2,250)
-		self.w.setColumnWidth(3,40)
+		self.fileTable = FileTable(0, 4, self)
+		self.fileTable.setObjectName('table')
+		self.fileTable.addFilesToView(self.droppedFiles)
 		
-		#self.model = QStandardItemModel(0, 3)
-		self.addFilesToView(self.droppedFiles, self.w)
-		
-		self.table_gl.addWidget(self.w, 0, 0, 1, 1)	
+		self.table_gl.addWidget(self.fileTable, 0, 0, 1, 1)	
 		
 		#ADD MORE AREA
 		self.gridLayoutAddMore = QGridLayout()
@@ -223,9 +94,6 @@ class MainWindow(QMainWindow):
 		self.processDir_gl.setContentsMargins(0, 8, 0, 8)
 		self.processDir_gl.setSpacing(6)
 		self.processDir_gl.setObjectName('processDir_gl')
-		#self.processDir_gl.setColumnMinimumWidth(3, 140)
-
-
 
 		self.zipFileDir_txt = QLineEdit(self.zipFileDir, self.centralwidget)
 		self.zipFileDir_txt.setPlaceholderText('C:\\Temp\\3dsMaxArchives\\')
@@ -258,10 +126,6 @@ class MainWindow(QMainWindow):
 		self.singleZipFile_txt = QLineEdit('', self.centralwidget)
 		self.singleZipFile_txt.setEnabled(False)
 		self.singleZipFile_txt.setPlaceholderText('Example.zip')
-		#sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-		#sizePolicy.setHorizontalStretch(1)
-		#sizePolicy.setVerticalStretch(0)
-		#sizePolicy.setHeightForWidth(self.zipFileDir_txt.sizePolicy().hasHeightForWidth())
 		self.singleZipFile_txt.setSizePolicy(sizePolicy)
 		self.singleZipFile_txt.setMinimumSize(QSize(0, 22))
 		self.singleZipFile_txt.setObjectName('singleZipFile_txt')
@@ -283,10 +147,15 @@ class MainWindow(QMainWindow):
 		self.process_btn.setText('  Archive')
 		self.process_btn.setMinimumSize(QSize(80, 40))
 		self.process_btn.setMaximumSize(QSize(16777215, 40))
-		#self.process_btn.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Maximum)
 		self.process_btn.setIcon(self.diskIcon)
 		self.process_btn.setIconSize(self.diskIcon.actualSize(QSize(50,50)))
 		self.process_btn.setObjectName('process_btn')
+
+		self.list_assets_btn = QPushButton(self.centralwidget)
+		self.list_assets_btn.setText('List All File Assets')
+		self.list_assets_btn.setMinimumSize(QSize(80, 40))
+		self.list_assets_btn.setMaximumSize(QSize(16777215, 40))
+		self.list_assets_btn.setObjectName('list_assets_btn')
 
 		
 		if Path(self.zipFileDir.strip()).is_dir() == False or (self.zipFileDir) == '':
@@ -297,6 +166,7 @@ class MainWindow(QMainWindow):
 			self.archiveDir = True
 
 		self.process_gl.addWidget(self.process_btn, 1, 1, 1, 1)
+		self.process_gl.addWidget(self.list_assets_btn, 2, 1, 1, 1)
 		self.process_gl.setColumnStretch(1, 1)
 			
 		self.verticalLayout.addLayout(self.gridLayoutAddMore)
@@ -316,28 +186,6 @@ class MainWindow(QMainWindow):
 	######################
 	## FUNCTIONS        ##
 	######################
-
-	def addFilesToView(self, files, view):
-		existingRows = view.rowCount()
-		for r, (file) in enumerate(files):
-			newRow = r + existingRows
-			it_id = QTableWidgetItem()
-			it_id.setData(Qt.UserRole+1001, 'empty')
-			it_file = QTableWidgetItem(file)
-			it_progress = QTableWidgetItem()
-			it_progress.setData(Qt.UserRole+1000, 0)
-			it_button = QTableWidgetItem()
-			
-			
-			view.insertRow(view.rowCount())
-			
-			for c, item in enumerate((it_id, it_file, it_progress, it_button)):
-				view.setItem(newRow, c, item)
-				if c != 3: item.setFlags(Qt.NoItemFlags)
-				removeButton = RemoveButton(self.w)
-				#removeButton = QPushButton('Remove', self.w)
-				removeButton.clicked.connect(self.removeRow)
-				view.setCellWidget(newRow,3,removeButton)
 		
 	def writeToConfig(self, setting, key, value):
 		#config = configparser.ConfigParser()
@@ -347,59 +195,30 @@ class MainWindow(QMainWindow):
 		with open(configFileName, 'w') as configfile:
 			config.write(configfile)
 
-	def setPBData(self,data):
-		self.w.item(data[0],2).setData(Qt.UserRole+1000,data[1])
-
-	def setIconData(self, data):
-		self.w.item(data[0],0).setData(Qt.UserRole+1001,data[1])
-
-	def setFinishedData(self, data):
-		existingData = self.w.item(data[0],0).data(Qt.UserRole+1001)
-		
-		if(existingData != 'error'):
-			self.w.item(data[0],0).setData(Qt.UserRole+1001,data[1])
-		
-		if (self.threadpool.activeThreadCount()) == 0:
-			self.setEnabledControlls(True)
-
-	def maxZipFiles(self, file):
-		maxZip = MaxFileZip(file, (file+'.zip'), True)
-
 	def setEnabledControlls(self, state):
-		self.w.setEnabled(state)
+		self.fileTable.setEnabled(state)
 		self.zipFileDir_btn.setEnabled(state)
 		self.zipFileDir_txt.setEnabled(state)
 		self.process_btn.setEnabled(state)
 		self.singleZipFile_chb.setEnabled(state)
+		self.list_assets_btn.setEnabled(state)
 		
 		if self.singleZipFile_chb.checkState() == 2:
 			self.singleZipFile_txt.setEnabled(state)
 		
 		self.setAcceptDrops(state)
 	
-	def resetProgressBars(self):
-		for row in range(self.w.rowCount()):
-			self.w.item(row,2).setData(Qt.UserRole+1000,0)
-			self.w.item(row,0).setData(Qt.UserRole+1001,'empty')
-
 	def checkReadyToArchive(self):
 		if (self.archiveDir == True and self.singleFile == True and self.singleCheck == True) or \
 		(self.archiveDir == True and self.singleFile == False and self.singleCheck == False):
 			self.process_btn.setEnabled(True)
 		else:
 			self.process_btn.setEnabled(False)
-		#print(self.archiveDir, self.singleCheck, self.singleFile)
 
 	######################
 	## BUTTON FUNCTIONS ##
 	######################
-	
-	def removeRow(self):
-		#print(self.sender().parent().parent().currentRow())
-		#print(self.sender())
-		r = (self.sender().parent().parent().currentRow())
-		self.sender().parent().parent().removeRow(r)
-	
+		
 	@pyqtSlot()
 	def on_zipFileDir_btn_clicked(self):
 		defaultDir = self.zipFileDir_txt.text() if self.zipFileDir_txt.text() != '' else QDir.home().dirName()
@@ -442,38 +261,65 @@ class MainWindow(QMainWindow):
 	
 	@pyqtSlot()
 	def on_process_btn_clicked(self):
-		self.resetProgressBars()
+		self.fileTable.resetProgressBars()
 		self.setEnabledControlls(False)
 		
-		#collect row data into a dict
-		rawData = {row:self.w.item(row,1).data(0) for row in range(self.w.rowCount()) }
+		#collect row data into a dict {row: maxfilepath}
+		rowData = { row: self.fileTable.item(row,1).data(0) for row in range(self.fileTable.rowCount()) }
 		processData = None
 		outPutZipFile = None
+		zipFileDir = self.zipFileDir_txt.text()
+		zipFileName = self.singleZipFile_txt.text()
 		
 		if self.singleZipFile_chb.checkState()==2:
 			#for single file make a list of one dict
-			processData = [rawData]
+			processData = [rowData]
 			
-			if (self.singleZipFile_txt.text())[-4:] != '.zip':
-				self.singleZipFile_txt.setText(self.singleZipFile_txt.text() + '.zip')
+			# check that the zip file ends with .zip
+			if not zipFileName.endswith('.zip'):
+				zipFileName = zipFileName + '.zip'
 			
-			outPutZipFile = PurePath(self.zipFileDir_txt.text(),self.singleZipFile_txt.text())
+			outPutZipFile = PurePath(zipFileDir, zipFileName)
 		else:
 			#for multi files make a list of dicts
-			processData = [{c:rawData[c]} for c in range(len(rawData))]
-			
-		
+			processData = [{c:rowData[c]} for c in range(len(rowData))]
+				
 		for data in processData:		
-			print(data)
-			maxZip = MaxFileZip(data, PurePath(self.zipFileDir_txt.text()), outPutZipFile, True)
+			maxZip = MaxFileZip(data, PurePath(zipFileDir), outPutZipFile, True)
 			
 			worker = Worker(maxZip.main)
-			worker.signals.started.connect(self.setIconData)
-			worker.signals.progress.connect(self.setPBData)
-			worker.signals.error.connect(self.setIconData)
-			worker.signals.finished.connect(self.setFinishedData)
+			worker.signals.started.connect(self.fileTable.setIconData)
+			worker.signals.progressValue.connect(self.fileTable.setPBData)
+			worker.signals.error.connect(self.fileTable.setIconData)
+			worker.signals.finished.connect(self.fileTable.setFinishedData)
 
 			self.threadpool.start(worker)
+
+	@pyqtSlot()
+	def on_list_assets_btn_clicked(self):
+		#collect row data into a dict
+		maxFiles = [self.fileTable.item(row,1).data(0) for row in range(self.fileTable.rowCount())]
+		allAssetsPaths = set()
+		for maxFile in maxFiles:
+			# init class
+			maxZip = MaxFileZip(None, None, None, True)
+			fileAssetsPaths = maxZip.collectAssetsPathsFromFile(maxFile, [])
+			allAssetsPaths.update(fileAssetsPaths)
+		
+		allAssetsPaths = list(allAssetsPaths)
+		allAssetsPaths.sort()
+		tempFile = tempfile.NamedTemporaryFile(mode = 'w+', newline='\n',suffix='.txt',delete=False)
+		dataWritten = False
+		with tempFile as assetLogFile:
+			for p in allAssetsPaths :
+				# if 'X:\\' in p: # and not os.path.exists(p):
+				try:
+					assetLogFile.write(p+'\n')
+					dataWritten = True
+				except:
+					print(p)
+		if dataWritten:
+			os.startfile(tempFile.name, 'open')
 
 
 	###########################
@@ -504,12 +350,11 @@ class MainWindow(QMainWindow):
 			e.setDropAction(Qt.CopyAction)
 			e.accept()
 			for url in e.mimeData().urls():
-				fname = str(PurePath((url.toLocalFile())))
-				if PurePath(fname).suffix == '.max' and fname not in self.droppedFiles:
+				fname = url.toLocalFile()
+				if PurePath(fname).suffix == '.max' and fname not in self.fileTable.droppedFiles:
 					newFiles.add(fname)
 
-			self.addFilesToView(newFiles, self.w)
-			self.droppedFiles.update(newFiles)
+			self.fileTable.addFilesToView(newFiles)
 		else:
 			e.ignore()
 
@@ -518,13 +363,14 @@ if __name__ == '__main__':
 	import sys
 	app = QApplication(sys.argv)
 	app.setStyle('Fusion')
-	app.setPalette(palette)
+	app.setPalette(PALETTE)
 
-	dirList = set()
-		
+	#dirSet = set()
+	dirSet:set  = {r'U:\Documents\3ds Max 2024\scenes\global_test_10.max'}
+	
 	for arg in sys.argv:
-		if PurePath(arg).suffix == '.max':
-			dirList.add(str(PurePath(arg)))
+		if PurePath(arg).suffix.lower() == '.max':
+			dirSet.add(arg)
 	
 	#sort the list , chech the code below make sure it's right
 	#dirList = sorted(dirList, key=lambda i: (os.path.basename(i)))
@@ -532,9 +378,9 @@ if __name__ == '__main__':
 	configFileName = 'ArchiveMax.ini'
 	config = configparser.ConfigParser()
 
-	zipFileDir = ''
+	zipFileDir: str = ''
 	
-	appIcon = appIcons.qIconFromBase64(appIcons.clampB)
+	appIcon = APPICONS.qIconFromBase64(APPICONS.clampB)
 	
 	try:
 		config.read(configFileName)
@@ -545,7 +391,5 @@ if __name__ == '__main__':
 		with open(configFileName, 'w') as configfile:
 			config.write(configfile)
 
-
-
-	ex = MainWindow(dirList, zipFileDir)
+	ex = MainWindow(dirSet, zipFileDir)
 	sys.exit(app.exec_())
