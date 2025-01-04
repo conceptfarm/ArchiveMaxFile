@@ -183,7 +183,7 @@ class MaxFileZip():
 				for count, assetPath in enumerate(allAssetsPaths):
 					if assetPath not in processedFiles:
 						if path.exists(assetPath):
-							archFile.write(assetPath, assetPath.replace(':','',1))
+							archFile.write(assetPath, assetPath.replace(':','',1).replace(r'\\','',1))
 							processedFiles.add(assetPath)
 						else:
 							missingFilesFile.write(assetPath+'\n')
