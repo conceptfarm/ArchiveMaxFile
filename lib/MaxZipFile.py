@@ -1,19 +1,32 @@
 import sys
 import zipfile
 import codecs
-
+from dataclasses import dataclass
 import olefile
 
 from os import path, remove
 from pathlib import PurePath, Path
+from typing import Optional, Union
+
+from lib.Threading import Callbacks
+
+
+
+@dataclass
+class OleAsset():
+	guid: str = ''
+	assetType: str = ''
+	assetPath: str = ''
+	resolvedPath: str = ''
 
 class MaxFileZip():
 
-	def __init__(self, inFileDict, outputZipDir, outZipFile=None, overwrite=False):
+	def __init__(self, inFileDict: dict, outputZipDir: PurePath, outZipFile: Optional[PurePath]=None, overwrite: bool=False):
 		self.inFileDict = inFileDict
 		self.outputZipDir = outputZipDir
 		self.outZipFile = outZipFile
 		self.overwrite = overwrite
+		self.callbacks = Callbacks()
 				
 	def bitToGUID(self, bits):
 		'''
@@ -35,57 +48,76 @@ class MaxFileZip():
 		else:
 			return(lEndian(bits[:4])+lEndian(bits[4:6])+lEndian(bits[6:8])+bEndian(bits[8:10])+bEndian(bits[10:16]))
 
-	def readStreamByByte(self,stream,nBytes):
+	def readStreamByByte(self,stream, nBytes: int):
+		"""Reads ole stream by n number of bytes\n
+		Stops reading once it hits \x00\x00
+
+		Args:
+			stream (OleStream): OLE stream to read
+			nBytes (int): Number of bytes at a time
+
+		Yields:
+			str: UTF16 decoded string
+		"""		
 		while True:
 			c = stream.read(nBytes)
 			if c == b'\x00\x00':
 				break
 			yield (str(c,'utf-16-le','ignore'))
 
-	def readStream(self, stream, hasResolvedPath):
+	def readStream(self, oleStream, hasResolvedPath:bool):
+		"""Reads OLE stream
+
+		Args:
+			oleStream (OleStream): OLE Stream to read
+			hasResolvedPath (bool): If ole file has resolved path
+
+		Yields:
+			list: ole metadata
+		"""		
 		bytesRead = 0
 		while True:
-			assetMetaData=[]
+			oleAsset = OleAsset()
 
-			#First 16 bytes should be the asset ID
-			buf = stream.read(16)
+			# First 16 bytes should be the asset ID
+			buf = oleStream.read(16)
 			if buf == b'':
 				break
 			
-			assetMetaData.append(self.bitToGUID(buf))
+			oleAsset.guid = self.bitToGUID(buf)
+			# 4 bytes padding garbage, skip that
+			oleStream.read(4) 
+
+			# Read by 2 bytes (16bit encoding) until null
+			# Asset type
+			buf = ''
+			for b in self.readStreamByByte(oleStream, 2):
+				buf = buf + b	
+			oleAsset.assetType = buf
+
 			#4 bytes padding garbage, skip that
-			stream.read(4) 
+			oleStream.read(4)
 
-			#Read by 2 bytes (16bit encoding) until null
-			#Asset type
+			# Read by 2 bytes (16bit encoding) until null
+			# Asset filename
 			buf=''
-			for b in self.readStreamByByte(stream,2):
-				buf=buf+b	
-			assetMetaData.append(buf)
+			for b in self.readStreamByByte(oleStream, 2):
+				buf = buf + b	
+			oleAsset.assetPath = buf
 
-			#4 bytes padding garbage, skip that
-			stream.read(4)
-
-			#Read by 2 bytes (16bit encoding) until null
-			#Asset filename
-			buf=''
-			for b in self.readStreamByByte(stream,2):
-				buf=buf+b	
-			assetMetaData.append(buf)
-
-			#Read by 2 bytes (16bit encoding) until null
-			#Asset resolved filename
+			# Read by 2 bytes (16bit encoding) until null
+			# Asset resolved filename
 			if (hasResolvedPath):
-				#4 bytes padding garbage, skip that
-				stream.read(4)
-				buf=''
-				for b in self.readStreamByByte(stream,2):
-					buf=buf+b	
-				assetMetaData.append(buf)
+				# 4 bytes padding garbage, skip that
+				oleStream.read(4)
+				buf = ''
+				for b in self.readStreamByByte(oleStream, 2):
+					buf = buf + b	
+				oleAsset.resolvedPath = buf
 
-			yield assetMetaData
+			yield oleAsset
 
-	def collectAssetsPathsFromFile(self, file, allAssetsPaths=[]):
+	def collectAssetsPathsFromFile(self, file: str, allAssetsPaths: list = []) -> Optional[list]:
 		
 		if olefile.isOleFile(file):
 			with olefile.OleFileIO(file) as ole:
@@ -103,51 +135,48 @@ class MaxFileZip():
 
 				oleStream = ole.openstream(streamName)	
 				
-				for assetObj in self.readStream(oleStream,hasResolvedPath):
-					#print(assetObj[2])
-					if assetObj[2] not in allAssetsPaths:
-						if assetObj[1] == 'XRef':
-							allAssetsPaths.append(assetObj[2])
-							allAssetsPaths = allAssetsPaths + self.collectAssetsPathsFromFile(assetObj[2], allAssetsPaths)
-						allAssetsPaths.append(assetObj[2])
+				for oleAsset in self.readStream(oleStream, hasResolvedPath):
+
+					# Use resolved path instead, if available
+					assetPath = oleAsset.resolvedPath if oleAsset.resolvedPath != '' else oleAsset.assetPath
+					if assetPath not in allAssetsPaths:
+						if oleAsset.assetType == 'XRef':
+							#add the xref path to the assets list anyway, we want it to be picked up in missing files collection
+							#if it doesn't exist
+							allAssetsPaths.append(assetPath)
+							if Path(assetPath).exists():
+								allAssetsPaths = allAssetsPaths + self.collectAssetsPathsFromFile(assetPath, allAssetsPaths)
+
+						else:
+							allAssetsPaths.append(assetPath)
 
 			return allAssetsPaths
 
-		else:
-			return None
-
-	#print( sys.getfilesystemencoding()	)
-
 	def main(self, **kwargs):
-		progress_callback = kwargs['progress_callback']
-		progress_started = kwargs['progress_started']
-		progress_finished = kwargs['progress_finished']
-		progress_error = kwargs['progress_error']
 
+		if kwargs:
+			self.callbacks = Callbacks(**kwargs)
 		
-		zfName =''
+		zfName = self.outZipFile
 
-		if self.outZipFile != None:
-			zfName = str(self.outZipFile)
-		else:
+		if self.outZipFile == None:
+			# If not a single zip, create zip file name from max file name
 			zipName = PurePath(list(self.inFileDict.values())[0]).name
-			zfName = str(PurePath(self.outputZipDir,(zipName+'.zip')))
-		
-		print(zfName)
-		
-		mfName = zfName + 'Missing Files.txt'
+			zfName = self.outputZipDir.joinpath(zipName + '.zip')
+				
+		mfName = str(zfName) + 'Missing Files.txt'
 		missingFilesCount = 0
 		processedFiles = set()
 		
 		with zipfile.ZipFile(zfName, 'w', zipfile.ZIP_DEFLATED) as archFile, open(mfName, 'w') as missingFilesFile:
-			for index, inMaxFile in self.inFileDict.items():
-				progress_started.emit((index,'proc'))
+			for row, inMaxFile in self.inFileDict.items():
+				self.callbacks.setstarted((row,'proc'))
 
-				allAssetsPaths = self.collectAssetsPathsFromFile(inMaxFile)
+				allAssetsPaths = self.collectAssetsPathsFromFile(inMaxFile, [])
 
 				if allAssetsPaths == None:
 					#error message - not a valid max file
-					progress_error.emit((index,'error'))
+					self.callbacks.seterror((row,'error'))
 					continue
 
 				# Adding files from directory 'files'
@@ -160,34 +189,17 @@ class MaxFileZip():
 							missingFilesFile.write(assetPath+'\n')
 							processedFiles.add(assetPath)
 							missingFilesCount +=1
-
-					#i = (count+1)/len(allAssetsPaths)*100
-					#print(index,i)
 					
 					i = round(((count+1)/len(allAssetsPaths)*100),2)
-					progress_callback.emit((index,i))
-
+					self.callbacks.callback((row,i))
 					
 				archFile.write(inMaxFile, inMaxFile.replace(':','',1))
 				
 			missingFilesFile.close()
 			if missingFilesCount > 0:
 				archFile.write(mfName, 'Missing Files.txt')
-			#archFile.close()
+		
 		remove(mfName)
-		for index, inMaxFile in self.inFileDict.items():
-			progress_finished.emit((index,'good'))
-
-
-
-'''
-#use:
-#inF = {0: 'C:\\Python37\\NEWS.txt', 1: 'C:\\Python37\\assetTest.max', 2: 'C:\\Python37\\field_skin.max'}
-inF = {0: 'X:/22-2071_VanTrust-Columbus New Albany/01_Models/04_Animation/CamSetup.max'}
-outF = 'C:/Python37/test.zip'
-
-gr = MaxFileZip(inF, outF, False, None)
-gr.main()
-'''
-
-
+		
+		for row, inMaxFile in self.inFileDict.items():
+			self.callbacks.setfinished((row,'good'))
