@@ -365,9 +365,8 @@ if __name__ == '__main__':
 	app.setStyle('Fusion')
 	app.setPalette(PALETTE)
 
-	#dirSet = set()
-	dirSet:set  = {r'U:\Documents\3ds Max 2024\scenes\global_test_10.max'}
-	
+	dirSet = set()
+		
 	for arg in sys.argv:
 		if PurePath(arg).suffix.lower() == '.max':
 			dirSet.add(arg)
